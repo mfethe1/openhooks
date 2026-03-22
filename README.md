@@ -4,6 +4,8 @@ Custom [OpenClaw](https://github.com/openclaw/openclaw) hooks for quality, persi
 
 ## Hooks
 
+### OpenClaw Internal Hooks
+
 | Hook | Emoji | Events | Purpose |
 |------|-------|--------|---------|
 | [memu-logger](hooks/memu-logger/) | 🧠 | `message:received`, `message:sent`, `command:new` | Persist conversations to memU for searchable cross-session memory |
@@ -13,6 +15,15 @@ Custom [OpenClaw](https://github.com/openclaw/openclaw) hooks for quality, persi
 | [compaction-guard](hooks/compaction-guard/) | 🛡️ | `session:compact:before/after` | Snapshot critical state before compaction to prevent context loss |
 | [gateway-health-beacon](hooks/gateway-health-beacon/) | 💓 | `gateway:startup`, `message:sent` | Multi-gateway discovery and health monitoring over NATS + memU |
 | [cross-gateway-relay](hooks/cross-gateway-relay/) | 🔀 | `message:sent`, `command:new`, `command:stop` | Cross-gateway task coordination signals for multi-host agent collaboration |
+
+### Claude Code Hooks
+
+| Hook | Emoji | Hook Type | Purpose |
+|------|-------|-----------|---------|
+| [claude-pre-tool-gate](hooks/claude-pre-tool-gate/) | 🛡️ | `PreToolUse` | Block destructive commands and writes to protected paths |
+| [claude-post-tool-verify](hooks/claude-post-tool-verify/) | ✅ | `PostToolUse` | Auto-run lint/syntax checks after file modifications |
+| [claude-anti-rationalization](hooks/claude-anti-rationalization/) | 🚫 | `Stop` | Detect premature stopping with incomplete work and force continuation |
+| [claude-precompact-saver](hooks/claude-precompact-saver/) | 💾 | `Notification` | Save critical state checkpoint before context compression |
 
 ## Installation
 
@@ -68,6 +79,33 @@ Add to your `~/.openclaw/openclaw.json`:
         "cross-gateway-relay": { "enabled": true }
       }
     }
+  }
+}
+```
+
+### Claude Code Installation
+
+Add to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "",
+      "hooks": [{ "type": "command", "command": "bash /path/to/openhooks/hooks/claude-pre-tool-gate/pre-tool-gate.sh" }]
+    }],
+    "PostToolUse": [{
+      "matcher": "",
+      "hooks": [{ "type": "command", "command": "bash /path/to/openhooks/hooks/claude-post-tool-verify/post-tool-verify.sh" }]
+    }],
+    "Stop": [{
+      "matcher": "",
+      "hooks": [{ "type": "command", "command": "bash /path/to/openhooks/hooks/claude-anti-rationalization/anti-rationalization-stop.sh" }]
+    }],
+    "Notification": [{
+      "matcher": "",
+      "hooks": [{ "type": "command", "command": "bash /path/to/openhooks/hooks/claude-precompact-saver/precompact-context-saver.sh" }]
+    }]
   }
 }
 ```
