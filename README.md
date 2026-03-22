@@ -138,6 +138,10 @@ All gateways publish to the same NATS server and memU instance.
 Agents discover each other via `openclaw.gateway.register` subjects.
 Task handoffs flow through `openclaw.agent.task.completed` → `openclaw.agent.available`.
 
+## Claude Code Hooks
+
+This repo also includes Python hooks for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — see [`claude-code-hooks/`](claude-code-hooks/) for security gates, git checkpointing, and DEPS planning hooks.
+
 ## License
 
 MIT
