@@ -8,9 +8,11 @@ Custom [OpenClaw](https://github.com/openclaw/openclaw) hooks for quality, persi
 |------|-------|--------|---------|
 | [memu-logger](hooks/memu-logger/) | 🧠 | `message:received`, `message:sent`, `command:new` | Persist conversations to memU for searchable cross-session memory |
 | [nats-publisher](hooks/nats-publisher/) | 📡 | `message:*`, `command:*`, `gateway:startup`, `session:compact:after` | Real-time event bus via NATS for cross-agent coordination |
-| [quality-gate](hooks/quality-gate/) | 🔍 | `message:received`, `message:sent` | Track response quality — latency, error patterns, apology loops |
+| [quality-gate](hooks/quality-gate/) | 🎯 | `message:received`, `message:sent` | Track response quality — latency, error patterns, apology loops |
 | [session-metrics](hooks/session-metrics/) | 📊 | All lifecycle events | Operational dashboarding — volumes, lifecycle, compaction frequency |
 | [compaction-guard](hooks/compaction-guard/) | 🛡️ | `session:compact:before/after` | Snapshot critical state before compaction to prevent context loss |
+| [gateway-health-beacon](hooks/gateway-health-beacon/) | 💓 | `gateway:startup`, `message:sent` | Multi-gateway discovery and health monitoring over NATS + memU |
+| [cross-gateway-relay](hooks/cross-gateway-relay/) | 🔀 | `message:sent`, `command:new`, `command:stop` | Cross-gateway task coordination signals for multi-host agent collaboration |
 
 ## Installation
 
@@ -27,19 +29,19 @@ openclaw hooks enable memu-logger
 openclaw gateway restart
 ```
 
-### Option 2: Link the entire repo
+### Option 2: Install all hooks
 
 ```bash
 # Clone this repo
 git clone https://github.com/mfethe1/openhooks.git
 
-# Link each hook you want
-for hook in memu-logger nats-publisher quality-gate session-metrics compaction-guard; do
+# Copy all hooks
+for hook in memu-logger nats-publisher quality-gate session-metrics compaction-guard gateway-health-beacon cross-gateway-relay; do
   cp -r openhooks/hooks/$hook ~/.openclaw/hooks/
 done
 
 # Enable all
-for hook in memu-logger nats-publisher quality-gate session-metrics compaction-guard; do
+for hook in memu-logger nats-publisher quality-gate session-metrics compaction-guard gateway-health-beacon cross-gateway-relay; do
   openclaw hooks enable $hook
 done
 
@@ -61,7 +63,9 @@ Add to your `~/.openclaw/openclaw.json`:
         "nats-publisher": { "enabled": true },
         "quality-gate": { "enabled": true },
         "session-metrics": { "enabled": true },
-        "compaction-guard": { "enabled": true }
+        "compaction-guard": { "enabled": true },
+        "gateway-health-beacon": { "enabled": true },
+        "cross-gateway-relay": { "enabled": true }
       }
     }
   }
@@ -72,11 +76,13 @@ Add to your `~/.openclaw/openclaw.json`:
 
 | Hook | Requirements |
 |------|-------------|
-| memu-logger | memU running at `http://localhost:8711` (or set `MEMU_ENDPOINT`) |
-| nats-publisher | NATS CLI at `/usr/local/bin/nats` (or set `NATS_BIN`) + NATS server |
+| memu-logger | memU running (or set `MEMU_ENDPOINT` + `MEMU_KEY`) |
+| nats-publisher | NATS CLI on PATH (or set `NATS_BIN`) + NATS server |
 | quality-gate | None (writes to `~/.openclaw/logs/`) |
 | session-metrics | `workspace.dir` configured |
 | compaction-guard | memU (optional, falls back to local file) |
+| gateway-health-beacon | NATS CLI + memU (both optional, graceful degradation) |
+| cross-gateway-relay | NATS CLI + NATS server |
 
 ## Design Principles
 
@@ -84,17 +90,24 @@ Add to your `~/.openclaw/openclaw.json`:
 2. **Privacy by default** — NATS gets metadata only; content goes to memU (trusted, internal)
 3. **Graceful degradation** — if memU or NATS is down, hooks silently continue
 4. **Delta-only metrics** — checkpoint at intervals, not every single event
+5. **Cross-platform** — all hooks work on Windows, Linux, and macOS
+6. **Correct memU schema** — uses `/api/v1/memu/add` with required `user_id`, `session_id`, `category` enum, and `X-MemU-Key` auth
 
 ## NATS Subject Hierarchy
 
 ```
-openclaw.message.received    # inbound messages (metadata only)
-openclaw.message.sent        # outbound messages (metadata only)
-openclaw.command.new         # /new command
-openclaw.command.reset       # /reset command
-openclaw.command.stop        # /stop command
-openclaw.gateway.startup     # gateway boot
-openclaw.session.compacted   # context compaction events
+openclaw.message.received       # inbound messages (metadata only)
+openclaw.message.sent           # outbound messages (metadata only)
+openclaw.command.new            # /new command
+openclaw.command.reset          # /reset command
+openclaw.command.stop           # /stop command
+openclaw.gateway.startup        # gateway boot
+openclaw.gateway.register       # gateway fleet registration
+openclaw.gateway.heartbeat      # periodic gateway health
+openclaw.session.compacted      # context compaction events
+openclaw.agent.task.completed   # agent finished a task
+openclaw.agent.available        # agent ready for work
+openclaw.agent.offline          # agent going offline
 ```
 
 Subscribe to all: `nats sub "openclaw.>"`
@@ -104,6 +117,26 @@ Subscribe to all: `nats sub "openclaw.>"`
 - `~/.openclaw/logs/quality-metrics.jsonl` — quality anomaly tracking
 - `<workspace>/metrics/YYYY-MM-DD-sessions.jsonl` — daily session metrics
 - `<workspace>/snapshots/compaction-YYYY-MM-DD.jsonl` — compaction snapshots
+
+## Architecture: Cross-Gateway Communication
+
+```
+┌─────────────────┐     NATS      ┌─────────────────┐
+│  Gateway A       │◄────────────►│  Gateway B       │
+│  (Windows)       │              │  (Mac/Linux)     │
+│                  │              │                  │
+│  Winnie (main)   │              │  Lenny, Rosie    │
+│  Macklemore      │              │  Macklemore      │
+│                  │              │                  │
+│  health-beacon ──┤──► NATS ◄──├── health-beacon   │
+│  cross-relay   ──┤──► NATS ◄──├── cross-relay     │
+│  memu-logger   ──┤──► memU ◄──├── memu-logger     │
+└─────────────────┘              └─────────────────┘
+```
+
+All gateways publish to the same NATS server and memU instance.
+Agents discover each other via `openclaw.gateway.register` subjects.
+Task handoffs flow through `openclaw.agent.task.completed` → `openclaw.agent.available`.
 
 ## License
 

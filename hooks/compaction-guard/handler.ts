@@ -1,18 +1,32 @@
 /**
  * Compaction Guard Hook
  * Snapshots critical state before compaction to prevent context loss.
+ *
+ * Fixed by Winnie:
+ * - Correct memU endpoint and auth header
+ * - Cross-platform paths (Windows + Linux/Mac)
+ * - Valid memU schema (user_id, session_id, category enum)
+ * - Reads from workspace-relative paths, not hardcoded Linux paths
  */
 
 import { appendFileSync, mkdirSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 
-const MEMU_ENDPOINT = process.env.MEMU_ENDPOINT || "http://localhost:8711";
+const MEMU_ENDPOINT =
+  process.env.MEMU_ENDPOINT || "https://api-production-86f5.up.railway.app";
+const MEMU_KEY = process.env.MEMU_KEY || process.env.X_MEMU_KEY || "";
+
+function getWorkspace(): string {
+  return (
+    process.env.OPENCLAW_WORKSPACE ||
+    (process.platform === "win32"
+      ? join(process.env.USERPROFILE || "C:\\Users\\default", ".openclaw", "workspace")
+      : join(process.env.HOME || "/tmp", ".openclaw/workspace"))
+  );
+}
 
 function getSnapshotDir(): string {
-  const workspace =
-    process.env.OPENCLAW_WORKSPACE ||
-    join(process.env.HOME || "/tmp", ".openclaw/workspace");
-  const dir = join(workspace, "snapshots");
+  const dir = join(getWorkspace(), "snapshots");
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
@@ -24,15 +38,24 @@ function snapshotFile(): string {
   return join(getSnapshotDir(), `compaction-${date}.jsonl`);
 }
 
-async function writeToMemU(content: string, meta: Record<string, any>) {
+async function writeToMemU(content: string, meta: Record<string, any>, sessionKey: string) {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (MEMU_KEY) {
+    headers["X-MemU-Key"] = MEMU_KEY;
+  }
+
   try {
-    await fetch(`${MEMU_ENDPOINT}/api/v1/memu/memories`, {
+    await fetch(`${MEMU_ENDPOINT}/api/v1/memu/add`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({
+        user_id: "openclaw-hook",
+        session_id: sessionKey,
+        category: "decision",
         content,
         metadata: meta,
-        namespace: "compaction_snapshots",
         tags: ["compaction", "snapshot"],
       }),
       signal: AbortSignal.timeout(5000),
@@ -43,21 +66,31 @@ async function writeToMemU(content: string, meta: Record<string, any>) {
 }
 
 function readActiveContext(): string {
-  // Try to read active-context.md or BACKLOG.md for current state
-  const workspace =
-    process.env.OPENCLAW_WORKSPACE ||
-    join(process.env.HOME || "/tmp", ".openclaw/workspace");
+  const workspace = getWorkspace();
 
+  // Try multiple potential context file locations (cross-platform)
   const contextFiles = [
-    join(workspace, "agent-coordination/active-context.md"),
-    "/home/michael-fethe/agent_coordination/active-context.md",
+    join(workspace, "agent-coordination", "active-context.md"),
+    join(workspace, "task-breakout.md"),
+    join(workspace, "decision-log.md"),
   ];
+
+  // Also check canonical mount paths (Linux/Mac only)
+  if (process.platform !== "win32") {
+    contextFiles.push(
+      "/home/michael-fethe/agent_coordination/active-context.md",
+      "/Volumes/EDrive-1/Projects/agent-coordination/active-context.md"
+    );
+  } else {
+    contextFiles.push(
+      "E:\\Projects\\agent-coordination\\active-context.md"
+    );
+  }
 
   for (const f of contextFiles) {
     try {
       if (existsSync(f)) {
         const content = readFileSync(f, "utf-8");
-        // Truncate to keep snapshot reasonable
         return content.slice(0, 2000);
       }
     } catch {
@@ -82,6 +115,7 @@ const handler = async (event: any) => {
       activeContext: activeContext || "none_found",
       tokenCount: event.context?.tokenCount || null,
       messageCount: event.context?.messageCount || null,
+      host: process.env.COMPUTERNAME || process.env.HOSTNAME || "unknown",
     };
 
     // Write to local file
@@ -98,7 +132,8 @@ const handler = async (event: any) => {
         type: "pre_compaction",
         sessionKey,
         timestamp: ts,
-      }
+      },
+      sessionKey
     );
 
     console.log(
@@ -115,6 +150,7 @@ const handler = async (event: any) => {
       summaryLength: event.context?.summary
         ? String(event.context.summary).length
         : 0,
+      host: process.env.COMPUTERNAME || process.env.HOSTNAME || "unknown",
     };
 
     try {
@@ -130,7 +166,8 @@ const handler = async (event: any) => {
         sessionKey,
         timestamp: ts,
         summaryLength: record.summaryLength,
-      }
+      },
+      sessionKey
     );
 
     console.log(
