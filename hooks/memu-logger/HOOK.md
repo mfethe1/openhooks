@@ -1,23 +1,50 @@
 ---
 name: memu-logger
-description: "Log all message events (received/sent) to memU for persistent cross-session memory and searchable conversation history"
-metadata: { "openclaw": { "emoji": "🧠", "events": ["message:received", "message:sent", "command:new"], "requires": { "config": ["workspace.dir"] } } }
+description: "Log all agent messages and session events to memU shared memory"
+homepage: https://docs.openclaw.ai/automation/hooks#memu-logger
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "🧠",
+        "events": ["message:received", "message:sent", "command:new", "command:reset", "agent:bootstrap"],
+        "requires": { "config": ["workspace.dir"] },
+        "install": [{ "id": "custom", "kind": "custom", "label": "Custom hook" }],
+      },
+  }
 ---
 
 # memU Logger Hook
 
-Captures inbound and outbound messages and persists them to memU (the shared Postgres+pgvector memory system) so all agents have searchable, durable conversation history.
+Logs all agent messages and session lifecycle events to the memU shared memory system.
 
 ## What It Does
 
-- **message:received**: Logs sender, content, channel, and timestamp to memU
-- **message:sent**: Logs outbound content, recipient, channel, and success status
-- **command:new**: Logs session reset events so agents know when context was cleared
-
-## Why
-
-Without this hook, conversation context is volatile — lost on compaction or session reset. memU persistence means any agent can search "what did Michael say about X last Tuesday" and get an answer.
+- **message:received** → stores inbound messages as `user_action` memories with sender/channel metadata
+- **message:sent** → stores outbound messages as `observation` memories with success/failure metadata
+- **command:new / command:reset** → stores session boundary events as `plan` memories (memory anchors)
+- **agent:bootstrap** → stores session start with loaded workspace files as `fact` memories
 
 ## Configuration
 
-Set `MEMU_ENDPOINT` env var (defaults to `http://localhost:8711`).
+```json
+{
+  "hooks": {
+    "internal": {
+      "entries": {
+        "memu-logger": {
+          "enabled": true,
+          "env": {
+            "MEMU_BASE_URL": "http://localhost:8000",
+            "MEMU_AGENT_ID": "macklemore"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+## Error Handling
+
+All memU calls are fire-and-forget with 5s timeout. Hook failures never block agent processing.

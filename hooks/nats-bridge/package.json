@@ -1,0 +1,7 @@
+{
+  "name": "nats-bridge-hook",
+  "version": "1.0.0",
+  "dependencies": {
+    "nats": "^2.28.2"
+  }
+}
